@@ -94,8 +94,8 @@ pub struct MacroSolverApp {
 
 impl MacroSolverApp {
     #[cfg(target_arch = "wasm32")]
-    pub fn setup_webworker_bridge(cc: &eframe::CreationContext<'_>) {
-        let ctx = cc.egui_ctx.clone();
+    pub fn setup_app(cc: &eframe::CreationContext<'_>) -> MacroSolverApp {
+                let ctx = cc.egui_ctx.clone();
         let data_update = Rc::new(Cell::new(None));
         let sender = data_update.clone();
 
@@ -105,15 +105,48 @@ impl MacroSolverApp {
                 ctx.request_repaint();
             })
             .spawn(concat!("./webworker", env!("RANDOM_SUFFIX"), ".js"));
+
+        cc.egui_ctx.set_pixels_per_point(1.2);
+        cc.egui_ctx.style_mut(|style| {
+            style.visuals.interact_cursor = Some(CursorIcon::PointingHand);
+            style.url_in_tooltip = true;
+            style.always_scroll_the_only_direction = true;
+        });
+
+        Self::load_fonts(&cc.egui_ctx);
+
+        let default_recipe_config = RecipeConfiguration {
+            recipe: *game_data::RECIPES.last().unwrap(),
+            quality_source: QualitySource::HqMaterialList([0; 6]),
+        };
+
+        Self {
+            locale: load(cc, "LOCALE", Locale::EN),
+            recipe_config: load(cc, "RECIPE_CONFIG", default_recipe_config),
+            selected_food: load(cc, "SELECTED_FOOD", None),
+            selected_potion: load(cc, "SELECTED_POTION", None),
+            crafter_config: load(cc, "CRAFTER_CONFIG", Default::default()),
+            solver_config: load(cc, "SOLVER_CONFIG", Default::default()),
+            macro_view_config: load(cc, "MACRO_VIEW_CONFIG", Default::default()),
+
+            custom_recipe: load(cc, "CUSTOM_RECIPE", false),
+            recipe_search_text: load(cc, "RECIPE_SEARCH_TEXT", Default::default()),
+            food_search_text: load(cc, "FOOD_SEARCH_TEXT", Default::default()),
+            potion_search_text: load(cc, "POTION_SEARCH_TEXT", Default::default()),
+
+            stats_edit_window_open: false,
+            actions: Vec::new(),
+            solver_pending: false,
+            solver_progress: 0.0,
+            start_time: None,
+            duration: None,
+            data_update,
+            bridge,
+        }
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn setup_webworker_bridge(cc: &eframe::CreationContext<'_>) {}
-
-    /// Called once before the first frame.
-    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        MacroSolverApp::setup_webworker_bridge(cc);
-
+    pub fn setup_app(cc: &eframe::CreationContext<'_>) -> MacroSolverApp {
         cc.egui_ctx.set_pixels_per_point(1.2);
         cc.egui_ctx.style_mut(|style| {
             style.visuals.interact_cursor = Some(CursorIcon::PointingHand);
@@ -150,6 +183,11 @@ impl MacroSolverApp {
             duration: None,
             bridge: None,
         }
+    }
+
+    /// Called once before the first frame.
+    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        MacroSolverApp::setup_app(cc)
     }
 }
 
