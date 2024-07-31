@@ -150,12 +150,8 @@ impl<'a> Widget for Simulator<'a> {
                     ui.set_width(ui.available_width());
                     ui.horizontal(|ui| {
                         for (action, error) in self.actions.iter().zip(errors.into_iter()) {
-                            let image_path = format!(
-                                "{}/action-icons/{}/{}.png",
-                                env!("BASE_URL"),
-                                get_job_name(self.crafter_config.selected_job, Locale::EN),
-                                action_name(*action, Locale::EN)
-                            );
+                            let image_path = get_image_path(self.crafter_config.selected_job, *action);
+
                             ui.add(
                                 egui::Image::new(image_path)
                                     .fit_to_exact_size(egui::Vec2::new(30.0, 30.0))
@@ -173,4 +169,24 @@ impl<'a> Widget for Simulator<'a> {
         })
         .response
     }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn get_image_path(selected_job: u8, action: Action) -> String {
+    format!(
+        "{}/action-icons/{}/{}.png",
+        "file://./assets",
+        get_job_name(selected_job, Locale::EN),
+        action_name(action, Locale::EN)
+    )
+}
+
+#[cfg(target_arch = "wasm32")]
+fn get_image_path(selected_job: u8, action: Action) -> String {
+    format!(
+        "{}/action-icons/{}/{}.png",
+        env!("BASE_URL"),
+        get_job_name(selected_job, Locale::EN),
+        action_name(action, Locale::EN)
+    )
 }

@@ -18,6 +18,7 @@ use crate::{
         ConsumableSelect, HelpText, MacroView, MacroViewConfig, RecipeSelect, Simulator, StatsEdit,
     },
 };
+use crate::worker::Bridge;
 
 fn load<T: DeserializeOwned>(cc: &eframe::CreationContext<'_>, key: &'static str, default: T) -> T {
     match cc.storage {
@@ -40,6 +41,8 @@ struct SolverConfig {
     adversarial: bool,
 }
 
+
+#[cfg(target_arch = "wasm32")]
 pub struct MacroSolverApp {
     locale: Locale,
     recipe_config: RecipeConfiguration,
@@ -64,9 +67,34 @@ pub struct MacroSolverApp {
     data_update: Rc<Cell<Option<SolverEvent>>>,
 }
 
+
+#[cfg(not(target_arch = "wasm32"))]
+pub struct MacroSolverApp {
+    locale: Locale,
+    recipe_config: RecipeConfiguration,
+    selected_food: Option<Consumable>,
+    selected_potion: Option<Consumable>,
+    crafter_config: CrafterConfig,
+    solver_config: SolverConfig,
+    macro_view_config: MacroViewConfig,
+
+    custom_recipe: bool,
+    recipe_search_text: String,
+    food_search_text: String,
+    potion_search_text: String,
+
+    stats_edit_window_open: bool,
+    actions: Vec<Action>,
+    solver_pending: bool,
+    solver_progress: f32,
+    start_time: Option<Instant>,
+    duration: Option<Duration>,
+    bridge: Option<Bridge<SolverEvent>>,
+}
+
 impl MacroSolverApp {
-    /// Called once before the first frame.
-    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+    #[cfg(target_arch = "wasm32")]
+    pub fn setup_webworker_bridge(cc: &eframe::CreationContext<'_>) {
         let ctx = cc.egui_ctx.clone();
         let data_update = Rc::new(Cell::new(None));
         let sender = data_update.clone();
@@ -77,6 +105,14 @@ impl MacroSolverApp {
                 ctx.request_repaint();
             })
             .spawn(concat!("./webworker", env!("RANDOM_SUFFIX"), ".js"));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn setup_webworker_bridge(cc: &eframe::CreationContext<'_>) {}
+
+    /// Called once before the first frame.
+    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        MacroSolverApp::setup_webworker_bridge(cc);
 
         cc.egui_ctx.set_pixels_per_point(1.2);
         cc.egui_ctx.style_mut(|style| {
@@ -112,49 +148,15 @@ impl MacroSolverApp {
             solver_progress: 0.0,
             start_time: None,
             duration: None,
-            data_update,
-            bridge,
+            bridge: None,
         }
     }
 }
 
 impl eframe::App for MacroSolverApp {
-    fn save(&mut self, storage: &mut dyn eframe::Storage) {
-        eframe::set_value(storage, "LOCALE", &self.locale);
-        eframe::set_value(storage, "RECIPE_CONFIG", &self.recipe_config);
-        eframe::set_value(storage, "SELECTED_FOOD", &self.selected_food);
-        eframe::set_value(storage, "SELECTED_POTION", &self.selected_potion);
-        eframe::set_value(storage, "CRAFTER_CONFIG", &self.crafter_config);
-        eframe::set_value(storage, "SOLVER_CONFIG", &self.solver_config);
-        eframe::set_value(storage, "MACRO_VIEW_CONFIG", &self.macro_view_config);
-
-        eframe::set_value(storage, "CUSTOM_RECIPE", &self.custom_recipe);
-        eframe::set_value(storage, "RECIPE_SEARCH_TEXT", &self.recipe_search_text);
-        eframe::set_value(storage, "FOOD_SEARCH_TEXT", &self.food_search_text);
-        eframe::set_value(storage, "POTION_SEARCH_TEXT", &self.potion_search_text);
-    }
-
-    fn auto_save_interval(&self) -> std::time::Duration {
-        std::time::Duration::from_secs(1)
-    }
-
     /// Called each time the UI needs repainting, which may be many times per second.
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        if let Some(update) = self.data_update.take() {
-            match update {
-                SolverEvent::Progress(progress) => {
-                    self.solver_progress = progress;
-                }
-                SolverEvent::IntermediateSolution(actions) => {
-                    self.actions = actions;
-                }
-                SolverEvent::FinalSolution(actions) => {
-                    self.actions = actions;
-                    self.duration = Some(Instant::now() - self.start_time.unwrap());
-                    self.solver_pending = false;
-                }
-            }
-        }
+        self.solver_update();
 
         egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
             egui::menu::bar(ui, |ui| {
@@ -336,9 +338,68 @@ impl eframe::App for MacroSolverApp {
             ui.add(StatsEdit::new(self.locale, &mut self.crafter_config));
         });
     }
+
+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        eframe::set_value(storage, "LOCALE", &self.locale);
+        eframe::set_value(storage, "RECIPE_CONFIG", &self.recipe_config);
+        eframe::set_value(storage, "SELECTED_FOOD", &self.selected_food);
+        eframe::set_value(storage, "SELECTED_POTION", &self.selected_potion);
+        eframe::set_value(storage, "CRAFTER_CONFIG", &self.crafter_config);
+        eframe::set_value(storage, "SOLVER_CONFIG", &self.solver_config);
+        eframe::set_value(storage, "MACRO_VIEW_CONFIG", &self.macro_view_config);
+
+        eframe::set_value(storage, "CUSTOM_RECIPE", &self.custom_recipe);
+        eframe::set_value(storage, "RECIPE_SEARCH_TEXT", &self.recipe_search_text);
+        eframe::set_value(storage, "FOOD_SEARCH_TEXT", &self.food_search_text);
+        eframe::set_value(storage, "POTION_SEARCH_TEXT", &self.potion_search_text);
+    }
+
+    fn auto_save_interval(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(1)
+    }
 }
 
 impl MacroSolverApp {
+    #[cfg(target_arch = "wasm32")]
+    fn solver_update(&mut self) {
+        if let Some(update) = self.data_update.take() {
+            match update {
+                SolverEvent::Progress(progress) => {
+                    self.solver_progress = progress;
+                }
+                SolverEvent::IntermediateSolution(actions) => {
+                    self.actions = actions;
+                }
+                SolverEvent::FinalSolution(actions) => {
+                    self.actions = actions;
+                    self.duration = Some(Instant::now() - self.start_time.unwrap());
+                    self.solver_pending = false;
+                }
+            }
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn solver_update(&mut self) {
+        if let Some(bridge_rx) = &self.bridge {
+            if let Ok(update) = bridge_rx.rx.try_recv() {
+                match update {
+                    SolverEvent::Progress(progress) => {
+                        self.solver_progress = progress;
+                    }
+                    SolverEvent::IntermediateSolution(actions) => {
+                        self.actions = actions;
+                    }
+                    SolverEvent::FinalSolution(actions) => {
+                        self.actions = actions;
+                        self.duration = Some(Instant::now() - self.start_time.unwrap());
+                        self.solver_pending = false;
+                    }
+                }
+            }
+        }
+    }
+
     fn draw_configuration_widget(&mut self, ui: &mut egui::Ui) {
         ui.vertical(|ui| {
             ui.horizontal(|ui| {
@@ -590,8 +651,9 @@ impl MacroSolverApp {
                             QualitySource::Value(quality) => quality,
                         };
                         game_settings.max_quality = target_quality.saturating_sub(initial_quality);
-                        self.bridge
-                            .send((game_settings, self.solver_config.backload_progress));
+
+                        self.spawn_or_send_bridge(game_settings);
+
                         log::debug!("{game_settings:?}");
                     }
                     if self.solver_pending {
@@ -605,6 +667,18 @@ impl MacroSolverApp {
                 });
             });
         });
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn spawn_or_send_bridge(&mut self, game_settings: Settings) {
+        if self.bridge.is_none() {
+            self.bridge = Some(Bridge::spawn_worker((game_settings, self.solver_config.backload_progress)));
+        }
+    }
+    #[cfg(target_arch = "wasm32")]
+    fn spawn_or_send_bridge(&mut self, game_settings: Settings) {
+        self.bridge
+            .send((game_settings, self.solver_config.backload_progress));
     }
 
     fn load_fonts(ctx: &egui::Context) {

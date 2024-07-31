@@ -6,3 +6,4 @@ pub use app::{MacroSolverApp, WebWorker};
 mod config;
 mod utils;
 mod widgets;
+mod worker;
